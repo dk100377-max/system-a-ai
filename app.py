@@ -1,102 +1,104 @@
 import streamlit as st
-import requests
+import ccxt
+import pandas as pd
+import numpy as np
 
-st.set_page_config(page_title="系統 A - AI 交易決策", layout="centered")
+st.set_page_config(page_title="系統 A - 頂尖決策中心", layout="wide")
 
-# 強制開啟深色模式並自訂 CSS
 st.markdown("""
 <style>
-    /* 強制深色背景 */
     .stApp { background-color: #0e1117; color: #fafafa; }
-    .signal-box { text-align: center; padding: 20px; border-radius: 10px; margin: 20px 0; }
-    .sell-signal { background-color: rgba(255, 75, 75, 0.1); color: #ff4b4b; border: 1px solid #ff4b4b; }
-    .buy-signal { background-color: rgba(0, 204, 150, 0.1); color: #00cc96; border: 1px solid #00cc96; }
-    .signal-text { font-size: 40px; font-weight: bold; margin: 0; }
-    .price-row { display: flex; justify-content: space-between; text-align: center; margin-top: 20px; }
-    .price-col { flex: 1; padding: 10px; border-radius: 5px; margin: 0 5px; }
-    .sl-col { background-color: rgba(255, 75, 75, 0.2); border-top: 3px solid #ff4b4b; }
-    .tp-col { background-color: rgba(0, 204, 150, 0.2); border-top: 3px solid #00cc96; }
-    .entry-col { background-color: rgba(56, 123, 255, 0.2); border-top: 3px solid #387bff; }
-    .label { font-size: 14px; color: #aaa; margin-bottom: 5px; }
-    .value { font-size: 22px; font-weight: bold; color: #ffffff; }
-    /* 強制文字白色 */
     h1, h2, h3, p, div { color: #fafafa !important; }
+    .bull-box { background-color: rgba(0, 204, 150, 0.1); border-left: 4px solid #00cc96; padding: 15px; margin: 10px 0; border-radius: 5px; }
+    .bear-box { background-color: rgba(255, 75, 75, 0.1); border-left: 4px solid #ff4b4b; padding: 15px; margin: 10px 0; border-radius: 5px; }
+    .risk-box { background-color: rgba(56, 123, 255, 0.1); border-left: 4px solid #387bff; padding: 15px; margin: 10px 0; border-radius: 5px; }
+    .final-box { background-color: rgba(255, 255, 255, 0.1); border: 2px solid #fafafa; padding: 20px; margin: 20px 0; border-radius: 10px; text-align: center; }
 </style>
 """, unsafe_allow_html=True)
 
-# 頂部：時間週期與按鈕
-col1, col2 = st.columns([2, 1])
-with col1:
-    timeframe = st.selectbox("Chart Timeframe", ["1-Min", "15-Min", "1-Hour", "4-Hour"])
-with col2:
-    st.markdown("<br>", unsafe_allow_html=True)
-    analyze_btn = st.button("Analyze Chart", use_container_width=True, type="primary")
+st.title("🏛️ 系統 A：多空交易員 vs 風控經理")
 
-st.divider()
+@st.cache_resource
+def get_exchange():
+    return ccxt.binance({'enableRateLimit': True})
 
-# 抓取當前價格 (加入 Headers 防止被幣安阻擋)
+exchange = get_exchange()
+
 @st.cache_data(ttl=60)
-def get_price(symbol="BTCUSDT"):
+def fetch_data(symbol, timeframe, limit):
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", headers=headers, timeout=5)
-        return float(res.json()["price"])
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        return df
     except Exception as e:
-        return 69000.0 # 如果抓不到，先用預設值防崩潰
+        return pd.DataFrame()
 
-current_price = get_price()
+# 獲取 4H 和 15m 數據
+df_4h = fetch_data("BTC/USDT", "4h", 50)
+df_15m = fetch_data("BTC/USDT", "15m", 100)
 
-# 系統 A 邏輯 (先模擬做空)
-is_sell = True 
-sl_price = current_price * 1.015 # 止損放上方 1.5%
-tp1_price = current_price * 0.985 # TP1 在下方 1.5%
-tp2_price = current_price * 0.975 # TP2 在下方 2.5%
+if not df_4h.empty and not df_15m.empty:
+    # 計算指標：4H 的 20 EMA (判斷大趨勢)
+    df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
+    current_price = df_15m['close'].iloc[-1]
+    ema_4h = df_4h['EMA_20'].iloc[-1]
+    
+    # 簡單波動率計算 (用近 20 根 15m K 線的高低差)
+    recent_high = df_15m['high'].rolling(window=20).max().iloc[-1]
+    recent_low = df_15m['low'].rolling(window=20).min().iloc[-1]
+    volatility = (recent_high - recent_low) / recent_low * 100
 
-st.markdown("### Pattern Analysis")
-st.markdown("🟢 **Neutral Market** | 🟡 **1-Min Timeframe**")
+    st.markdown(f"### 📊 實時數據 (BTC/USDT) | 現價: `${current_price:.2f}`")
 
-# 顯示當前價格與信號
-sig_col1, sig_col2 = st.columns(2)
-with sig_col1:
-    st.markdown("**Current Price**")
-    st.markdown(f"<h2 style='margin-top:0;'>{current_price:.2f}</h2>", unsafe_allow_html=True)
-with sig_col2:
-    if is_sell:
-        st.markdown("<div class='signal-box sell-signal'><p class='label'>Sell Signal (Entry)</p><h2 class='signal-text'>SELL</h2><p class='label'>Enter short position at current price</p></div>", unsafe_allow_html=True)
+    # 角色 1：多頭頂尖交易員
+    st.markdown("<div class='bull-box'><h4>🐂 多頭頂尖交易員：</h4>", unsafe_allow_html=True)
+    if current_price > ema_4h:
+        bull_opinion = f"4H 價格在 20 EMA 上方 ({ema_4h:.2f})，大趨勢偏多。如果 15m 回踩出現看漲 FVG 或掃蕩前低，我認為是做多良機，目標看向近期高點。"
     else:
-        st.markdown("<div class='signal-box buy-signal'><p class='label'>Buy Signal (Entry)</p><h2 class='signal-text'>BUY</h2><p class='label'>Enter long position at current price</p></div>", unsafe_allow_html=True)
+        bull_opinion = f"目前價格低於 4H 20 EMA ({ema_4h:.2f})，大趨勢對多頭不利。但我會觀察 15m 是否出現極端洗盤（假跌破），如果跌不下去，我會嘗試搶反彈。"
+    st.write(bull_opinion)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# 顯示風控與目標
-st.markdown("### Risk Management")
-st.markdown("**Scalp Trading: SHORT Position**")
+    # 角色 2：空頭頂尖交易員
+    st.markdown("<div class='bear-box'><h4>🐻 空頭頂尖交易員：</h4>", unsafe_allow_html=True)
+    if current_price < ema_4h:
+        bear_opinion = f"價格跌破 4H 20 EMA ({ema_4h:.2f})，空頭掌握主導權。反彈無力就是進場機會，我會在 15m 尋找看跌 FVG 或假突破做空。"
+    else:
+        bear_opinion = f"價格在 4H 20 EMA 上方 ({ema_4h:.2f})，但近期波動極大。若 15m 出現明顯的結構破壞 (CHoCH)，我會嘗試抓頂部做空。"
+    st.write(bear_opinion)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-st.markdown(f"""
-<div class='price-row'>
-    <div class='price-col sl-col'>
-        <div class='label'>Stop Loss</div>
-        <div class='value'>{sl_price:.2f}</div>
-        <div class='label'>1.5%</div>
-    </div>
-    <div class='price-col entry-col'>
-        <div class='label'>Entry</div>
-        <div class='value'>{current_price:.2f}</div>
-        <div class='label'>Now</div>
-    </div>
-    <div class='price-col tp-col'>
-        <div class='label'>Take Profit 1</div>
-        <div class='value'>{tp1_price:.2f}</div>
-        <div class='label'>1.5%</div>
-    </div>
-    <div class='price-col tp-col'>
-        <div class='label'>Take Profit 2</div>
-        <div class='value'>{tp2_price:.2f}</div>
-        <div class='label'>2.5%</div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+    # 角色 3：風控經理 (最高指揮官)
+    st.markdown("<div class='risk-box'><h4>🛡️ 風控經理 (最高決策者)：</h4>", unsafe_allow_html=True)
+    
+    # 風控邏輯：波動率過大或趨勢不明顯時，一票否決
+    if volatility > 3.0:
+        final_decision = "⚠️ 當前波動率過大 (近期高低差超過 3%)，市場處於極端洗盤狀態，容易多空雙殺。我行使一票否決權：『強制觀望，不准交易』。"
+        status_color = "gray"
+    elif abs(current_price - ema_4h) / ema_4h < 0.005:
+        final_decision = "⚠️ 價格緊貼 4H 20 EMA，市場處於無趨勢震盪狀態。看不出方向，我行使一票否決權：『觀望，等方向明確』。"
+        status_color = "gray"
+    else:
+        if current_price > ema_4h:
+            final_decision = "✅ 多頭趨勢明確且波動在可控範圍，批准多頭交易員的計畫。請等待 15m 回踩信號。"
+            status_color = "green"
+        else:
+            final_decision = "✅ 空頭趨勢明確且波動在可控範圍，批准空頭交易員的計畫。請等待 15m 反彈信號。"
+            status_color = "red"
 
-st.markdown("---")
-st.markdown("💡 **系統 A 交易建議**")
-st.markdown("* 等待 15m FVG 回踩並出現確認 K 線")
-st.markdown("* 嚴格執行 1:2 與 1:4 盈虧比")
-st.markdown("* 本金 50U，單筆風險 1% (0.5U)")
+    st.write(final_decision)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # 最終結論
+    st.markdown(f"<div class='final-box'><h2 style='color:{status_color} !important;'>最終決策：{'觀望等待' if status_color == 'gray' else ('準備做多' if status_color == 'green' else '準備做空')}</h2></div>", unsafe_allow_html=True)
+
+    # 顯示原始數據
+    with st.expander("🔍 查看底層 K 線數據"):
+        st.write("**4H K線 (最後 5 根)**")
+        st.dataframe(df_4h.tail(5), use_container_width=True)
+        st.write("**15m K線 (最後 5 根)**")
+        st.dataframe(df_15m.tail(5), use_container_width=True)
+
+else:
+    st.error("數據抓取失敗，請重新整理網頁。")
