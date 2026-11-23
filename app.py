@@ -53,17 +53,14 @@ if not df_4h.empty and not df_15m.empty:
     recent_low = df_15m['low'].rolling(window=20).min().iloc[-1]
     volatility = (recent_high - recent_low) / recent_low * 100
 
-    # 尋找最近的 FVG (掃描最後 20 根 15m K 線)
+    # 尋找最近的 FVG (掃描最後 30 根 15m K 線)
     def find_fvg(df, is_bullish=True):
         if is_bullish:
-            # 看漲 FVG: K線1的高點 < K線3的低點
             for i in range(len(df)-3, 0, -1):
                 if df['high'].iloc[i-2] < df['low'].iloc[i]:
-                    # 檢查是否已經被回補 (後續有K線跌破缺口下沿)
                     if df['low'].iloc[i-1:].min() > df['high'].iloc[i-2]:
-                        return df['high'].iloc[i-2], df['low'].iloc[i] # 返回缺口下沿和上沿
+                        return df['high'].iloc[i-2], df['low'].iloc[i]
         else:
-            # 看跌 FVG: K線1的低點 > K線3的高點
             for i in range(len(df)-3, 0, -1):
                 if df['low'].iloc[i-2] > df['high'].iloc[i]:
                     if df['high'].iloc[i-1:].max() < df['low'].iloc[i-2]:
@@ -75,19 +72,26 @@ if not df_4h.empty and not df_15m.empty:
 
     st.markdown(f"### 📊 實時數據 (BTC/USDT) | 現價: `${current_price:.2f}`")
 
-    # 多空對話
+    # 多頭對話
     st.markdown("<div class='bull-box'><h4>🐂 多頭頂尖交易員：</h4>", unsafe_allow_html=True)
     if current_price > ema_4h:
-        st.write(f"4H 趨勢偏多。我發現下方有一個看漲 FVG ({bull_fvg_low:.2f}-{bull_fvg_high:.2f})，如果回踩到這裡，絕對是做多良機。")
+        if bull_fvg_low:
+            st.write(f"4H 趨勢偏多。我發現下方有一個看漲 FVG ({bull_fvg_low:.2f} - {bull_fvg_high:.2f})，如果回踩到這裡，絕對是做多良機。")
+        else:
+            st.write("4H 趨勢偏多，但目前沒有找到未回補的看漲 FVG，我會繼續等待。")
     else:
-        st.write(f"大趨勢偏空。我暫時不進場，除非 15m 跌破前低又迅速收回，我才會考慮搶反彈。")
+        st.write("大趨勢偏空。我暫時不進場，除非 15m 跌破前低又迅速收回，我才會考慮搶反彈。")
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # 空頭對話
     st.markdown("<div class='bear-box'><h4>🐻 空頭頂尖交易員：</h4>", unsafe_allow_html=True)
     if current_price < ema_4h:
-        st.write(f"價格在 4H EMA 下方，空頭主導。上方有一個看跌 FVG ({bear_fvg_low:.2f}-{bear_fvg_high:.2f})，反彈到這裡我就空。")
+        if bear_fvg_low:
+            st.write(f"價格在 4H EMA 下方，空頭主導。上方有一個看跌 FVG ({bear_fvg_low:.2f} - {bear_fvg_high:.2f})，反彈到這裡我就空。")
+        else:
+            st.write("價格在 4H EMA 下方，但上方沒有發現有效的看跌 FVG 缺口，目前不適合追空。")
     else:
-        st.write(f"價格還在均線上方，我暫時觀望。如果 15m 出現明顯的假突破，我會嘗試抓頂部。")
+        st.write("價格還在均線上方，我暫時觀望。如果 15m 出現明顯的假突破，我會嘗試抓頂部。")
     st.markdown("</div>", unsafe_allow_html=True)
 
     # 風控經理
@@ -102,12 +106,12 @@ if not df_4h.empty and not df_15m.empty:
     elif abs(current_price - ema_4h) / ema_4h < 0.005:
         st.write("⚠️ 價格緊貼 4H 20 EMA，看不出方向。觀望，等方向明確！")
     else:
-        if current_price > ema_4h and bull_fvg_low and bull_fvg_high:
+        if current_price > ema_4h and bull_fvg_low:
             st.write("✅ 批准多頭計畫。請等待回踩 FVG 區間。")
             decision = "準備做多"
             status_color = "green"
             trade_setup = "bull"
-        elif current_price < ema_4h and bear_fvg_low and bear_fvg_high:
+        elif current_price < ema_4h and bear_fvg_low:
             st.write("✅ 批准空頭計畫。請等待反彈 FVG 區間。")
             decision = "準備做空"
             status_color = "red"
@@ -122,8 +126,8 @@ if not df_4h.empty and not df_15m.empty:
     if trade_setup:
         st.markdown("### 🎯 交易員狙擊計畫")
         if trade_setup == "bull":
-            entry_price = (bull_fvg_low + bull_fvg_high) / 2 # 取 FVG 50%
-            sl_price = bull_fvg_low * 0.995 # FVG 下沿再退 0.5%
+            entry_price = (bull_fvg_low + bull_fvg_high) / 2
+            sl_price = bull_fvg_low * 0.995
             risk = entry_price - sl_price
             tp1 = entry_price + risk * 2
             tp2 = entry_price + risk * 4
