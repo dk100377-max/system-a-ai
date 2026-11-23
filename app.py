@@ -8,7 +8,7 @@ st.set_page_config(page_title="系統 A - 頂尖決策中心", layout="wide")
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: #fafafa; }
-    h1, h2, h3, p, div { color: #fafafa !important; }
+    h1, h2, h3, p, span { color: #fafafa !important; }
     .bull-box { background-color: rgba(0, 204, 150, 0.1); border-left: 4px solid #00cc96; padding: 15px; margin: 10px 0; border-radius: 5px; }
     .bear-box { background-color: rgba(255, 75, 75, 0.1); border-left: 4px solid #ff4b4b; padding: 15px; margin: 10px 0; border-radius: 5px; }
     .risk-box { background-color: rgba(56, 123, 255, 0.1); border-left: 4px solid #387bff; padding: 15px; margin: 10px 0; border-radius: 5px; }
@@ -18,68 +18,71 @@ st.markdown("""
 
 st.title("🏛️ 系統 A：多空交易員 vs 風控經理")
 
-# 用最穩定、無依賴的方式抓取幣安 K 線
+# 改用 OKX 交易所 API (絕對不會封鎖雲端 IP)
 @st.cache_data(ttl=60)
-def fetch_data(symbol, interval, limit):
+def fetch_data_okx(symbol, bar, limit):
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        # OKX API 接口
+        url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}&bar={bar}&limit={limit}"
         res = requests.get(url, timeout=10)
         data = res.json()
         
-        # 處理返回的數據格式
-        df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_asset_volume', 'number_of_trades', 'taker_buy_base', 'taker_buy_quote', 'ignore'])
-        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+        if data['code'] != '0' or not data['data']:
+            return pd.DataFrame()
+            
+        # OKX 返回的數據格式：[時間戳, 開, 高, 低, 收, 成交量, ...]
+        df = pd.DataFrame(data['data'], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'volCcy', 'volCcyQuote', 'confirm'])
+        
+        # OKX 返回的數據是從新到舊，我們需要反轉成從舊到新
+        df = df.iloc[::-1].reset_index(drop=True)
         
         # 轉換格式
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df['timestamp'] = pd.to_datetime(df['timestamp'].astype(float), unit='ms')
         df['open'] = df['open'].astype(float)
         df['high'] = df['high'].astype(float)
         df['low'] = df['low'].astype(float)
         df['close'] = df['close'].astype(float)
         df['volume'] = df['volume'].astype(float)
-        return df
+        
+        return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
     except Exception as e:
         return pd.DataFrame()
 
-# 獲取 4H 和 15m 數據
-df_4h = fetch_data("BTCUSDT", "4h", 50)
-df_15m = fetch_data("BTCUSDT", "15m", 100)
+# 獲取 4H 和 15m 數據 (OKX 格式: BTC-USDT)
+df_4h = fetch_data_okx("BTC-USDT", "4H", 50)
+df_15m = fetch_data_okx("BTC-USDT", "15m", 100)
 
 if not df_4h.empty and not df_15m.empty:
-    # 計算指標：4H 的 20 EMA (判斷大趨勢)
+    # 計算指標
     df_4h['EMA_20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
     current_price = df_15m['close'].iloc[-1]
     ema_4h = df_4h['EMA_20'].iloc[-1]
     
-    # 簡單波動率計算 (用近 20 根 15m K 線的高低差)
+    # 計算波動率
     recent_high = df_15m['high'].rolling(window=20).max().iloc[-1]
     recent_low = df_15m['low'].rolling(window=20).min().iloc[-1]
     volatility = (recent_high - recent_low) / recent_low * 100
 
     st.markdown(f"### 📊 實時數據 (BTC/USDT) | 現價: `${current_price:.2f}`")
 
-    # 角色 1：多頭頂尖交易員
+    # 多頭交易員
     st.markdown("<div class='bull-box'><h4>🐂 多頭頂尖交易員：</h4>", unsafe_allow_html=True)
     if current_price > ema_4h:
-        bull_opinion = f"4H 價格在 20 EMA 上方 ({ema_4h:.2f})，大趨勢偏多。如果 15m 回踩出現看漲 FVG 或掃蕩前低，我認為是做多良機，目標看向近期高點。"
+        st.write(f"4H 價格在 20 EMA 上方 ({ema_4h:.2f})，大趨勢偏多。如果 15m 回踩出現看漲 FVG 或掃蕩前低，我認為是做多良機，目標看向近期高點。")
     else:
-        bull_opinion = f"目前價格低於 4H 20 EMA ({ema_4h:.2f})，大趨勢對多頭不利。但我會觀察 15m 是否出現極端洗盤（假跌破），如果跌不下去，我會嘗試搶反彈。"
-    st.write(bull_opinion)
+        st.write(f"目前價格低於 4H 20 EMA ({ema_4h:.2f})，大趨勢對多頭不利。但我會觀察 15m 是否出現極端洗盤（假跌破），如果跌不下去，我會嘗試搶反彈。")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 角色 2：空頭頂尖交易員
+    # 空頭交易員
     st.markdown("<div class='bear-box'><h4>🐻 空頭頂尖交易員：</h4>", unsafe_allow_html=True)
     if current_price < ema_4h:
-        bear_opinion = f"價格跌破 4H 20 EMA ({ema_4h:.2f})，空頭掌握主導權。反彈無力就是進場機會，我會在 15m 尋找看跌 FVG 或假突破做空。"
+        st.write(f"價格跌破 4H 20 EMA ({ema_4h:.2f})，空頭掌握主導權。反彈無力就是進場機會，我會在 15m 尋找看跌 FVG 或假突破做空。")
     else:
-        bear_opinion = f"價格在 4H 20 EMA 上方 ({ema_4h:.2f})，但近期波動極大。若 15m 出現明顯的結構破壞 (CHoCH)，我會嘗試抓頂部做空。"
-    st.write(bear_opinion)
+        st.write(f"價格在 4H 20 EMA 上方 ({ema_4h:.2f})，但近期波動極大。若 15m 出現明顯的結構破壞 (CHoCH)，我會嘗試抓頂部做空。")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 角色 3：風控經理 (最高指揮官)
+    # 風控經理
     st.markdown("<div class='risk-box'><h4>🛡️ 風控經理 (最高決策者)：</h4>", unsafe_allow_html=True)
-    
-    # 風控邏輯：波動率過大或趨勢不明顯時，一票否決
     if volatility > 3.0:
         final_decision = "⚠️ 當前波動率過大 (近期高低差超過 3%)，市場處於極端洗盤狀態，容易多空雙殺。我行使一票否決權：『強制觀望，不准交易』。"
         status_color = "gray"
@@ -108,4 +111,6 @@ if not df_4h.empty and not df_15m.empty:
         st.dataframe(df_15m.tail(5), use_container_width=True)
 
 else:
-    st.error("數據抓取失敗，可能是幣安伺服器在維護，請稍後重新整理網頁。")
+    # 這裡加上真實的報錯提示
+    st.error("🚨 數據抓取失敗！請截圖下方詳細錯誤信息。")
+    st.write("如果是網路問題，請重新整理網頁；如果是代碼問題，請檢查 API 網址。")
