@@ -1,5 +1,5 @@
 import streamlit as st
-import ccxt
+import requests
 import pandas as pd
 import numpy as np
 
@@ -18,25 +18,32 @@ st.markdown("""
 
 st.title("🏛️ 系統 A：多空交易員 vs 風控經理")
 
-@st.cache_resource
-def get_exchange():
-    return ccxt.binance({'enableRateLimit': True})
-
-exchange = get_exchange()
-
+# 用最穩定、無依賴的方式抓取幣安 K 線
 @st.cache_data(ttl=60)
-def fetch_data(symbol, timeframe, limit):
+def fetch_data(symbol, interval, limit):
     try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        res = requests.get(url, timeout=10)
+        data = res.json()
+        
+        # 處理返回的數據格式
+        df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_asset_volume', 'number_of_trades', 'taker_buy_base', 'taker_buy_quote', 'ignore'])
+        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+        
+        # 轉換格式
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df['open'] = df['open'].astype(float)
+        df['high'] = df['high'].astype(float)
+        df['low'] = df['low'].astype(float)
+        df['close'] = df['close'].astype(float)
+        df['volume'] = df['volume'].astype(float)
         return df
     except Exception as e:
         return pd.DataFrame()
 
 # 獲取 4H 和 15m 數據
-df_4h = fetch_data("BTC/USDT", "4h", 50)
-df_15m = fetch_data("BTC/USDT", "15m", 100)
+df_4h = fetch_data("BTCUSDT", "4h", 50)
+df_15m = fetch_data("BTCUSDT", "15m", 100)
 
 if not df_4h.empty and not df_15m.empty:
     # 計算指標：4H 的 20 EMA (判斷大趨勢)
@@ -101,4 +108,4 @@ if not df_4h.empty and not df_15m.empty:
         st.dataframe(df_15m.tail(5), use_container_width=True)
 
 else:
-    st.error("數據抓取失敗，請重新整理網頁。")
+    st.error("數據抓取失敗，可能是幣安伺服器在維護，請稍後重新整理網頁。")
