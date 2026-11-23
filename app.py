@@ -4,16 +4,18 @@ import pandas as pd
 import numpy as np
 import time
 
-st.set_page_config(page_title="系統 A - 實戰交易回測", layout="wide")
+st.set_page_config(page_title="系統 A - 多空雙向實戰", layout="wide")
 
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; }
     .stButton>button { width: 100%; background-color: #ff4b4b; color: white; font-weight: bold; font-size: 18px; height: 50px; }
+    h1, h2, h3, p { color: #fafafa !important; }
+    .stMetric label { color: #aaa !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏛️ 系統 A：高頻實戰交易回測")
+st.title("🏛️ 系統 A：多空雙向 FVG 實戰回測")
 
 @st.cache_data(ttl=3600)
 def fetch_historical_data(days_back=90):
@@ -47,9 +49,9 @@ def fetch_historical_data(days_back=90):
     df['timestamp'] = pd.to_datetime(df['timestamp'].astype(float), unit='ms') + pd.Timedelta(hours=8)
     return df
 
-st.info("實戰邏輯：當 RSI(14) 跌破 30 且在 EMA(100) 之上時做多。止損 1.5%，止盈 3%。這能保證在三個月內產生大量交易。")
+st.info("策略邏輯：大週期 EMA(50) 判斷多空。順勢尋找 15m FVG 缺口，回踩/反抽且出現確認 K 線時進場。嚴格 1:2 盈虧比。")
 
-if st.button("🚀 開始實戰回測"):
+if st.button("🚀 開始多空雙向回測"):
     df = fetch_historical_data(90)
     
     if df.empty:
@@ -57,50 +59,98 @@ if st.button("🚀 開始實戰回測"):
     else:
         st.write(f"✅ 數據抓取成功！共 {len(df)} 根 15m K 線。")
         
-        # 計算指標
-        df['EMA_100'] = df['close'].ewm(span=100, adjust=False).mean()
-        
-        # 計算 RSI
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
+        df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
         
         balance = 50.0
         initial_balance = 50.0
         trades = []
         in_position = False
+        position_type = None # 'LONG' or 'SHORT'
         entry_price = 0
         sl = 0
         tp = 0
         fee_rate = 0.0005
         
-        for i in range(100, len(df)):
+        for i in range(60, len(df)):
+            current_open = df['open'].iloc[i]
             current_close = df['close'].iloc[i]
             current_high = df['high'].iloc[i]
             current_low = df['low'].iloc[i]
-            rsi = df['RSI'].iloc[i]
-            ema100 = df['EMA_100'].iloc[i]
+            ema50 = df['EMA_50'].iloc[i]
             
             if not in_position:
-                # 進場條件：RSI 超賣跌破30，且大趨勢向上
-                if rsi < 30 and current_close > ema100:
-                    in_position = True
-                    entry_price = current_close
-                    sl = entry_price * 0.985  # 1.5% 止損
-                    tp = entry_price * 1.03   # 3% 止盈
+                # 找 FVG
+                bull_fvg_found = False
+                bear_fvg_found = False
+                
+                for j in range(i-10, i-1):
+                    # 看漲 FVG: K線1的高點 < K線3的低點
+                    if df['high'].iloc[j] < df['low'].iloc[j+2]:
+                        bull_fvg_low = df['high'].iloc[j]
+                        bull_fvg_high = df['low'].iloc[j+2]
+                        bull_fvg_found = True
+                        break
+                
+                for j in range(i-10, i-1):
+                    # 看跌 FVG: K線1的低點 > K線3的高點
+                    if df['low'].iloc[j] > df['high'].iloc[j+2]:
+                        bear_fvg_high = df['low'].iloc[j]
+                        bear_fvg_low = df['high'].iloc[j+2]
+                        bear_fvg_found = True
+                        break
+                
+                # 做多進場邏輯：大趨勢多 + 回踩看漲 FVG + 收陽線
+                if current_close > ema50 and bull_fvg_found:
+                    if current_low <= bull_fvg_high and current_close > current_open:
+                        in_position = True
+                        position_type = 'LONG'
+                        entry_price = current_close
+                        sl = bull_fvg_low * 0.998
+                        risk = entry_price - sl
+                        
+                        if risk / entry_price <= 0.02: # 止損小於 2% 才做
+                            tp = entry_price + (risk * 2)
+                        else:
+                            in_position = False
+                
+                # 做空進場邏輯：大趨勢空 + 反彈看跌 FVG + 收陰線
+                elif current_close < ema50 and bear_fvg_found:
+                    if current_high >= bear_fvg_low and current_close < current_open:
+                        in_position = True
+                        position_type = 'SHORT'
+                        entry_price = current_close
+                        sl = bear_fvg_high * 1.002
+                        risk = sl - entry_price
+                        
+                        if risk / entry_price <= 0.02:
+                            tp = entry_price - (risk * 2)
+                        else:
+                            in_position = False
             else:
-                if current_low <= sl:
-                    loss = -0.015 - fee_rate * 2
-                    balance = balance * (1 + loss)
-                    trades.append({'結果': '止損', '盈虧': loss, '時間': df['timestamp'].iloc[i], '價格': sl})
-                    in_position = False
-                elif current_high >= tp:
-                    profit = 0.03 - fee_rate * 2
-                    balance = balance * (1 + profit)
-                    trades.append({'結果': '止盈', '盈虧': profit, '時間': df['timestamp'].iloc[i], '價格': tp})
-                    in_position = False
+                # 平倉邏輯
+                if position_type == 'LONG':
+                    if current_low <= sl:
+                        loss = - (entry_price - sl) / entry_price - fee_rate * 2
+                        balance = balance * (1 + loss)
+                        trades.append({'方向': '做多', '結果': '止損', '盈虧': loss, '時間': df['timestamp'].iloc[i], '價格': sl})
+                        in_position = False
+                    elif current_high >= tp:
+                        profit = (tp - entry_price) / entry_price - fee_rate * 2
+                        balance = balance * (1 + profit)
+                        trades.append({'方向': '做多', '結果': '止盈', '盈虧': profit, '時間': df['timestamp'].iloc[i], '價格': tp})
+                        in_position = False
+                        
+                elif position_type == 'SHORT':
+                    if current_high >= sl:
+                        loss = - (sl - entry_price) / entry_price - fee_rate * 2
+                        balance = balance * (1 + loss)
+                        trades.append({'方向': '做空', '結果': '止損', '盈虧': loss, '時間': df['timestamp'].iloc[i], '價格': sl})
+                        in_position = False
+                    elif current_low <= tp:
+                        profit = (entry_price - tp) / entry_price - fee_rate * 2
+                        balance = balance * (1 + profit)
+                        trades.append({'方向': '做空', '結果': '止盈', '盈虧': profit, '時間': df['timestamp'].iloc[i], '價格': tp})
+                        in_position = False
                     
         if len(trades) > 0:
             df_trades = pd.DataFrame(trades)
@@ -110,9 +160,12 @@ if st.button("🚀 開始實戰回測"):
             net_profit = balance - initial_balance
             roi = (net_profit / initial_balance) * 100
             
-            st.markdown("### 📊 實戰回測數據盤")
+            long_trades = len(df_trades[df_trades['方向'] == '做多'])
+            short_trades = len(df_trades[df_trades['方向'] == '做空'])
+            
+            st.markdown("### 📊 多空雙向回測數據盤")
             col1, col2, col3, col4 = st.columns(4)
-            col1.metric("總交易次數", f"{total_trades} 筆")
+            col1.metric("總交易次數", f"{total_trades} 筆 (多:{long_trades} 空:{short_trades})")
             col2.metric("勝率", f"{win_rate:.2f} %")
             col3.metric("最終資金", f"${balance:.2f} U")
             col4.metric("總收益率", f"{roi:.2f} %")
@@ -128,8 +181,8 @@ if st.button("🚀 開始實戰回測"):
             st.dataframe(df_trades.tail(10), use_container_width=True)
             
             if roi > 0:
-                st.success(f"🎉 恭喜！這套策略在過去三個月為你的 50U 賺了 {net_profit:.2f} U！")
+                st.success(f"🎉 太棒了！這才是真正的「順應市場」。多空雙做讓你在這段時間賺了 {net_profit:.2f} U。")
             else:
-                st.error("⚠️ 這套策略在過去三個月依然虧損，這說明我們需要更好的過濾條件。")
+                st.error("⚠️ 雖然加入了做空，但這段行情可能過於反覆，導致兩面被止損。我們需要繼續優化。")
         else:
             st.warning("這段時間內沒有觸發交易信號。")
