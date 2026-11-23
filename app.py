@@ -4,17 +4,16 @@ import pandas as pd
 import numpy as np
 import time
 
-st.set_page_config(page_title="系統 A - 頂尖交易員回測", layout="wide")
+st.set_page_config(page_title="系統 A - 實戰交易回測", layout="wide")
 
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; }
     .stButton>button { width: 100%; background-color: #ff4b4b; color: white; font-weight: bold; font-size: 18px; height: 50px; }
-    h1, h2, h3, p { color: #fafafa !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏛️ 系統 A：頂尖交易員結構回測")
+st.title("🏛️ 系統 A：高頻實戰交易回測")
 
 @st.cache_data(ttl=3600)
 def fetch_historical_data(days_back=90):
@@ -48,15 +47,25 @@ def fetch_historical_data(days_back=90):
     df['timestamp'] = pd.to_datetime(df['timestamp'].astype(float), unit='ms') + pd.Timedelta(hours=8)
     return df
 
-st.info("預測邏輯：尋找 15m 假跌破（流動性掃蕩）後迅速收回，並留下看漲 FVG。價格回踩缺口時進場。單筆風險 1%，盈虧比 1:2。")
+st.info("實戰邏輯：當 RSI(14) 跌破 30 且在 EMA(100) 之上時做多。止損 1.5%，止盈 3%。這能保證在三個月內產生大量交易。")
 
-if st.button("🚀 開始頂尖交易員回測"):
+if st.button("🚀 開始實戰回測"):
     df = fetch_historical_data(90)
     
     if df.empty:
         st.error("數據抓取失敗。")
     else:
-        st.success(f"數據抓取成功！共 {len(df)} 根 15m K 線。")
+        st.write(f"✅ 數據抓取成功！共 {len(df)} 根 15m K 線。")
+        
+        # 計算指標
+        df['EMA_100'] = df['close'].ewm(span=100, adjust=False).mean()
+        
+        # 計算 RSI
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
         
         balance = 50.0
         initial_balance = 50.0
@@ -67,64 +76,41 @@ if st.button("🚀 開始頂尖交易員回測"):
         tp = 0
         fee_rate = 0.0005
         
-        # 尋找假跌破 (Liquidity Sweep) 與 FVG
-        for i in range(15, len(df)):
-            current_open = df['open'].iloc[i]
+        for i in range(100, len(df)):
             current_close = df['close'].iloc[i]
             current_high = df['high'].iloc[i]
             current_low = df['low'].iloc[i]
+            rsi = df['RSI'].iloc[i]
+            ema100 = df['EMA_100'].iloc[i]
             
             if not in_position:
-                # 條件 1：尋找前低 (過去 10 根的最低點)
-                prev_low = df['low'].iloc[i-10:i].min()
-                
-                # 條件 2：流動性掃蕩 (當前K線跌破前低，但收盤價又拉回前低之上)
-                is_sweep = current_low < prev_low and current_close > prev_low
-                
-                # 條件 3：這根 K 線必須是陽線 (強勢收回)
-                is_bullish = current_close > current_open
-                
-                # 條件 4：尋找這根 K 線與前兩根產生的 FVG
-                if i >= 2:
-                    fvg_low = df['high'].iloc[i-2]
-                    fvg_high = df['low'].iloc[i]
-                    has_fvg = fvg_low < fvg_high
-                else:
-                    has_fvg = False
-                    
-                # 預測進場：發生掃蕩 + 陽線 + 有FVG，且當前價格剛好回踩到 FVG 上沿附近
-                if is_sweep and is_bullish and has_fvg:
-                    # 我們在這裡做一個「預測性」進場：直接在這根 V 轉 K 線的收盤價買入
+                # 進場條件：RSI 超賣跌破30，且大趨勢向上
+                if rsi < 30 and current_close > ema100:
                     in_position = True
                     entry_price = current_close
-                    sl = current_low * 0.998 # 止損設在剛剛插針的最低點下方
-                    
-                    # 確保止損距離合理 (小於 2%)
-                    if (entry_price - sl) / entry_price > 0.02:
-                        in_position = False 
-                    else:
-                        tp = entry_price * 1.035 # 止盈設 3.5%
+                    sl = entry_price * 0.985  # 1.5% 止損
+                    tp = entry_price * 1.03   # 3% 止盈
             else:
                 if current_low <= sl:
-                    loss = - (entry_price - sl) / entry_price - fee_rate * 2
+                    loss = -0.015 - fee_rate * 2
                     balance = balance * (1 + loss)
-                    trades.append({'result': 'SL', 'pnl': loss, 'time': df['timestamp'].iloc[i]})
+                    trades.append({'結果': '止損', '盈虧': loss, '時間': df['timestamp'].iloc[i], '價格': sl})
                     in_position = False
                 elif current_high >= tp:
-                    profit = (tp - entry_price) / entry_price - fee_rate * 2
+                    profit = 0.03 - fee_rate * 2
                     balance = balance * (1 + profit)
-                    trades.append({'result': 'TP', 'pnl': profit, 'time': df['timestamp'].iloc[i]})
+                    trades.append({'結果': '止盈', '盈虧': profit, '時間': df['timestamp'].iloc[i], '價格': tp})
                     in_position = False
                     
         if len(trades) > 0:
             df_trades = pd.DataFrame(trades)
             total_trades = len(trades)
-            wins = len(df_trades[df_trades['result'] == 'TP'])
+            wins = len(df_trades[df_trades['結果'] == '止盈'])
             win_rate = (wins / total_trades) * 100
             net_profit = balance - initial_balance
             roi = (net_profit / initial_balance) * 100
             
-            st.markdown("### 📊 頂尖結構回測數據盤")
+            st.markdown("### 📊 實戰回測數據盤")
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("總交易次數", f"{total_trades} 筆")
             col2.metric("勝率", f"{win_rate:.2f} %")
@@ -133,15 +119,17 @@ if st.button("🚀 開始頂尖交易員回測"):
             
             equity = [initial_balance]
             for t in trades:
-                equity.append(equity[-1] * (1 + t['pnl']))
+                equity.append(equity[-1] * (1 + t['盈虧']))
                 
             st.markdown("### 📉 資金淨值曲線")
             st.line_chart(equity)
             
-            # 顯示交易明細供你參考
-            st.markdown("### 📝 最近 10 筆交易明細")
+            st.markdown("### 📝 交易明細 (最近 10 筆)")
             st.dataframe(df_trades.tail(10), use_container_width=True)
             
-            st.success("💡 這就是頂尖交易員的預測邏輯：不猜底，等主力露出馬腳（掃蕩）再跟進。")
+            if roi > 0:
+                st.success(f"🎉 恭喜！這套策略在過去三個月為你的 50U 賺了 {net_profit:.2f} U！")
+            else:
+                st.error("⚠️ 這套策略在過去三個月依然虧損，這說明我們需要更好的過濾條件。")
         else:
-            st.warning("這段時間內沒有觸發「掃蕩 + FVG」的頂級信號。")
+            st.warning("這段時間內沒有觸發交易信號。")
