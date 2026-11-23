@@ -3,20 +3,24 @@ import requests
 
 st.set_page_config(page_title="系統 A - AI 交易決策", layout="centered")
 
-# 自訂 CSS 讓排版更像截圖
+# 強制開啟深色模式並自訂 CSS
 st.markdown("""
 <style>
+    /* 強制深色背景 */
+    .stApp { background-color: #0e1117; color: #fafafa; }
     .signal-box { text-align: center; padding: 20px; border-radius: 10px; margin: 20px 0; }
     .sell-signal { background-color: rgba(255, 75, 75, 0.1); color: #ff4b4b; border: 1px solid #ff4b4b; }
     .buy-signal { background-color: rgba(0, 204, 150, 0.1); color: #00cc96; border: 1px solid #00cc96; }
     .signal-text { font-size: 40px; font-weight: bold; margin: 0; }
     .price-row { display: flex; justify-content: space-between; text-align: center; margin-top: 20px; }
     .price-col { flex: 1; padding: 10px; border-radius: 5px; margin: 0 5px; }
-    .sl-col { background-color: rgba(255, 75, 75, 0.15); border-top: 3px solid #ff4b4b; }
-    .tp-col { background-color: rgba(0, 204, 150, 0.15); border-top: 3px solid #00cc96; }
-    .entry-col { background-color: rgba(56, 123, 255, 0.15); border-top: 3px solid #387bff; }
-    .label { font-size: 14px; color: #888; margin-bottom: 5px; }
-    .value { font-size: 20px; font-weight: bold; color: #fff; }
+    .sl-col { background-color: rgba(255, 75, 75, 0.2); border-top: 3px solid #ff4b4b; }
+    .tp-col { background-color: rgba(0, 204, 150, 0.2); border-top: 3px solid #00cc96; }
+    .entry-col { background-color: rgba(56, 123, 255, 0.2); border-top: 3px solid #387bff; }
+    .label { font-size: 14px; color: #aaa; margin-bottom: 5px; }
+    .value { font-size: 22px; font-weight: bold; color: #ffffff; }
+    /* 強制文字白色 */
+    h1, h2, h3, p, div { color: #fafafa !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -30,18 +34,19 @@ with col2:
 
 st.divider()
 
-# 抓取當前價格
+# 抓取當前價格 (加入 Headers 防止被幣安阻擋)
 @st.cache_data(ttl=60)
 def get_price(symbol="BTCUSDT"):
     try:
-        res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}")
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", headers=headers, timeout=5)
         return float(res.json()["price"])
-    except:
-        return 69000.0
+    except Exception as e:
+        return 69000.0 # 如果抓不到，先用預設值防崩潰
 
 current_price = get_price()
 
-# 模擬信號 (做空)
+# 系統 A 邏輯 (先模擬做空)
 is_sell = True 
 sl_price = current_price * 1.015 # 止損放上方 1.5%
 tp1_price = current_price * 0.985 # TP1 在下方 1.5%
